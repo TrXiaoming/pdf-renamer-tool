@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF 切割圖片 & 批次命名工具</title>
+  
+  <!-- 引入 React & ReactDOM -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  
+  <!-- 引入 Babel (讓瀏覽器能直接編譯 JSX) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- 引入 Tailwind CSS (供樣式使用) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- 引入 Lucide Icons ( SVG 圖示 ) -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    /* 簡易模擬 Lucide React 元件的樣式 */
+    .icon { width: 1em; height: 1em; display: inline-block; vertical-align: middle; }
+  </style>
+</head>
+<body class="bg-gray-100">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // --- 簡易模擬 Lucide React 的 Icon 元件 ---
+    // 在純前端無建置環境下，我們用原生的 i 標籤配合 lucide.createIcons() 來實現
+    const Icon = ({ name, size = 24, className = '', color }) => {
+      const iconRef = useRef(null);
+      useEffect(() => {
+        if (iconRef.current && window.lucide) {
+          window.lucide.createIcons({
+            icons: { [name]: window.lucide.icons[name] },
+            nameAttr: 'data-lucide',
+            root: iconRef.current.parentNode,
+          });
+        }
+      }, [name]);
+      
+      const style = {};
+      if (color) style.color = color;
+      if (size) { style.width = size; style.height = size; }
+
+      return <i data-lucide={name} className={`icon ${className}`} style={style} ref={iconRef}></i>;
+    };
+
+    // --- 主應用程式 ---
+    function App() {
+      const [files, setFiles] = useState([]);
+      const [prefix, setPrefix] = useState('Page_');
+      const [startNum, setStartNum] = useState(1);
+      const [padding, setPadding] = useState(3);
+      const [isProcessing, setIsProcessing] = useState(false);
+      const [progress, setProgress] = useState(0);
+      const [statusMsg, setStatusMsg] = useState('');
+      const [errorMsg, setErrorMsg] = useState('');
+      
+      const [pdfFile, setPdfFile] = useState(null);
+      const [pdfScale, setPdfScale] = useState(2);
+      const [isLibsLoaded, setIsLibsLoaded] = useState(false);
+      
+      const [showPasteModal, setShowPasteModal] = useState(false);
+      const [pasteContent, setPasteContent] = useState('');
+
+      const fileInputRef = useRef(null);
+
+      // 動態載入外部套件 (JSZip 與 PDF.js)
+      useEffect(() => {
+        let loadedCount = 0;
+        const totalLibs = 2;
+
+        const checkAllLoaded = () => {
+          loadedCount++;
+          if (loadedCount === totalLibs) {
+            setIsLibsLoaded(true);
+          }
+        };
+
+        if (!window.JSZip) {
+          const zipScript = document.createElement('script');
+          zipScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+          zipScript.async = true;
+          zipScript.onload = checkAllLoaded;
+          document.body.appendChild(zipScript);
+        } else {
+          checkAllLoaded();
+        }
+
+        if (!window.pdfjsLib) {
+          const pdfScript = document.createElement('script');
+          pdfScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+          pdfScript.async = true;
+          pdfScript.onload = () => {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            checkAllLoaded();
+          };
+          document.body.appendChild(pdfScript);
+        } else {
+          checkAllLoaded();
+        }
+      }, []);
+
+      const handlePdfSelect = (e) => {
+        if (!isLibsLoaded) {
+          setErrorMsg('系統正在載入核心模組，請稍後幾秒再試。');
+          return;
+        }
+
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        if (file.type !== 'application/pdf') {
+          setErrorMsg('請選擇一個有效的 PDF 檔案。');
+          return;
+        }
+
+        setPdfFile(file);
+        setErrorMsg('');
+        setStatusMsg('');
+        setFiles([]);
+        processPdf(file);
+      };
+
+      const processPdf = async (file) => {
+        setIsProcessing(true);
+        setErrorMsg('');
+        try {
+          setStatusMsg('正在讀取 PDF 結構...');
+          const arrayBuffer = await file.arrayBuffer();
+          const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+          const numPages = pdf.numPages;
+          
+          const newFiles = [];
+          for (let i = 1; i <= numPages; i++) {
+            const defaultName = `${prefix}${String(startNum + i - 1).padStart(padding, '0')}.jpg`;
+            newFiles.push({
+              pageNumber: i,
+              oldName: `第 ${i} 頁`,
+              newName: defaultName,
+              status: 'pending',
+              isManuallyEdited: false,
+              pdfRef: pdf
+            });
+          }
+          
+          setFiles(newFiles);
+          setStatusMsg(`成功讀取 PDF，共 ${numPages} 頁。請設定檔名後點擊下載。`);
+          
+        } catch (err) {
+          console.error(err);
+          setErrorMsg('讀取 PDF 失敗：' + err.message);
+        } finally {
+          setIsProcessing(false);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+      };
+
+      useEffect(() => {
+        setFiles(prevFiles => {
+          if (prevFiles.length === 0) return prevFiles;
+
+          return prevFiles.map((item, index) => {
+            if (item.status === 'success' || item.isManuallyEdited) {
+              return item;
+            }
+
+            const currentNum = startNum + index;
+            const numStr = String(currentNum).padStart(padding, '0');
+            const newName = `${prefix}${numStr}.jpg`;
+            
+            return { ...item, newName, status: item.status === 'success' ? 'success' : 'pending' };
+          });
+        });
+      }, [prefix, startNum, padding]);
+
+      const handleManualNameChange = (index, value) => {
+        setFiles(prevFiles => {
+          const newFiles = [...prevFiles];
+          newFiles[index] = {
+            ...newFiles[index],
+            newName: value,
+            isManuallyEdited: true
+          };
+          return newFiles;
+        });
+      };
+
+      const resetManualEdits = () => {
+        setFiles(prevFiles => prevFiles.map((item, index) => {
+          if (item.status === 'success') return item;
+          
+          const currentNum = startNum + index;
+          const numStr = String(currentNum).padStart(padding, '0');
+          return { 
+            ...item, 
+            newName: `${prefix}${numStr}.jpg`, 
+            isManuallyEdited: false 
+          };
+        }));
+      };
+
+      const handleApplyPaste = () => {
+        const lines = pasteContent.split(/\r?\n/).map(line => line.trim()).filter(line => line !== '');
+        if (lines.length === 0) {
+          setShowPasteModal(false);
+          return;
+        }
+
+        setFiles(prevFiles => {
+          const newFiles = [...prevFiles];
+          for (let i = 0; i < Math.min(lines.length, newFiles.length); i++) {
+            if (newFiles[i].status === 'success') continue;
+
+            let newBaseName = lines[i];
+            if (newBaseName.toLowerCase().endsWith('.jpg')) {
+              newBaseName = newBaseName.substring(0, newBaseName.length - 4);
+            } else if (newBaseName.toLowerCase().endsWith('.png') || newBaseName.toLowerCase().endsWith('.pdf')) {
+               newBaseName = newBaseName.substring(0, newBaseName.length - 4);
+            }
+
+            newFiles[i] = {
+              ...newFiles[i],
+              newName: newBaseName + '.jpg',
+              isManuallyEdited: true
+            };
+          }
+          return newFiles;
+        });
+
+        setShowPasteModal(false);
+        setPasteContent('');
+      };
+
+      const renderPageToJpegBlob = async (pdfDoc, pageNumber, scale) => {
+        const page = await pdfDoc.getPage(pageNumber);
+        const viewport = page.getViewport({ scale: scale });
+
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const renderContext = {
+          canvasContext: ctx,
+          viewport: viewport,
+          background: 'white'
+        };
+
+        await page.render(renderContext).promise;
+
+        return new Promise((resolve) => {
+          canvas.toBlob((blob) => {
+            resolve(blob);
+          }, 'image/jpeg', 0.92);
+        });
+      };
+
+      const executeExport = async () => {
+        if (files.length === 0) return;
+        
+        setIsProcessing(true);
+        setProgress(0);
+        setErrorMsg('');
+        setStatusMsg('正在將 PDF 頁面轉換為圖片，並打包成 ZIP...');
+
+        try {
+          if (!window.JSZip) {
+            throw new Error('ZIP 打包套件尚未載入完成，請稍後再試。');
+          }
+          
+          const zip = new window.JSZip();
+          const pdfDoc = files[0].pdfRef; 
+          const newFilesState = [...files];
+
+          for (let i = 0; i < newFilesState.length; i++) {
+            const item = newFilesState[i];
+            setStatusMsg(`正在轉換第 ${item.pageNumber} 頁...`);
+            
+            try {
+              let finalName = item.newName.trim();
+              if (!finalName.toLowerCase().endsWith('.jpg')) {
+                 finalName += '.jpg';
+              }
+              
+              const imageBlob = await renderPageToJpegBlob(pdfDoc, item.pageNumber, pdfScale);
+              zip.file(finalName, imageBlob);
+              
+              item.status = 'success';
+              item.oldName = finalName; 
+              
+            } catch (pageErr) {
+              console.error(`渲染第 ${item.pageNumber} 頁失敗:`, pageErr);
+              item.status = 'error';
+            }
+            
+            setProgress(Math.round(((i + 1) / files.length) * 50));
+            setFiles([...newFilesState]);
+          }
+          
+          setStatusMsg('正在壓縮 ZIP 檔案，請稍候...');
+
+          const zipBlob = await zip.generateAsync({ type: 'blob' }, (metadata) => {
+            setProgress(50 + Math.round(metadata.percent / 2));
+          });
+
+          const url = URL.createObjectURL(zipBlob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = pdfFile ? `${pdfFile.name.replace('.pdf', '')}_Images.zip` : 'PDF_Images.zip';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+
+          setStatusMsg('🎉 處理完成！檔案已打包為 ZIP 下載。');
+
+        } catch (err) {
+          setErrorMsg('匯出失敗: ' + err.message);
+          setStatusMsg('');
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen text-gray-800 p-4 md:p-8">
+          <div className="max-w-6xl mx-auto space-y-6">
+            
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept="application/pdf"
+              className="hidden"
+              onChange={handlePdfSelect}
+            />
+
+            <div className="bg-white rounded-2xl shadow-sm p-6 flex flex-col md:flex-row items-center justify-between border border-gray-200">
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                  <Icon name="file-up" className="text-red-500" />
+                  PDF 切割圖片 & 批次命名工具
+                </h1>
+                <p className="text-sm text-gray-500 mt-1">完全在您的瀏覽器本地執行，將 PDF 每頁轉為高畫質 JPG 並自訂檔名打包。</p>
+              </div>
+              <button
+                onClick={() => fileInputRef.current.click()}
+                disabled={isProcessing || !isLibsLoaded}
+                className="mt-4 md:mt-0 flex items-center gap-2 px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50"
+              >
+                <Icon name="file-up" size={20} />
+                {!isLibsLoaded ? '模組載入中...' : (pdfFile ? '重新選擇 PDF' : '選擇 PDF 檔案')}
+              </button>
+            </div>
+
+            {errorMsg && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center gap-2">
+                <Icon name="alert-triangle" size={20} />
+                {errorMsg}
+              </div>
+            )}
+
+            {statusMsg && !errorMsg && (
+              <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg flex items-center gap-2 font-medium">
+                <Icon name="info" size={20} />
+                {statusMsg}
+              </div>
+            )}
+
+            {files.length > 0 && (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                
+                <div className="lg:col-span-1 space-y-6">
+                  <div className="bg-white rounded-2xl shadow-sm p-6 border border-gray-200">
+                    <h2 className="text-lg font-bold mb-4 flex items-center gap-2 border-b pb-2">
+                      <Icon name="settings" size={20} className="text-gray-600"/>
+                      輸出設定與規則
+                    </h2>
+                    
+                    <div className="space-y-4">
+                      
+                      <div className="bg-gray-50 p-3 rounded-lg border border-gray-200 mb-4">
+                        <label className="block text-sm font-medium text-gray-700 mb-1 flex justify-between">
+                          <span>輸出圖片解析度</span>
+                          <span className="text-blue-600 font-bold">{pdfScale}x</span>
+                        </label>
+                        <input
+                          type="range"
+                          min="1"
+                          max="4"
+                          step="0.5"
+                          value={pdfScale}
+                          onChange={(e) => setPdfScale(parseFloat(e.target.value))}
+                          disabled={isProcessing}
+                          className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                        />
+                        <div className="flex justify-between text-xs text-gray-500 mt-1">
+                          <span>標準 (快)</span>
+                          <span>超高畫質 (慢)</span>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">自訂前綴名稱</label>
+                        <input
+                          type="text"
+                          value={prefix}
+                          onChange={(e) => setPrefix(e.target.value)}
+                          disabled={isProcessing}
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                          placeholder="例如: Page_"
+                        />
+                      </div>
+                      
+                      <div className="flex gap-4">
+                        <div className="flex-1">
+                          <label className="block text-sm font-medium text-gray-700 mb-1">起始編號</label>
+                          <input
+                            type="number"
+                            min="0"
+                            value={startNum}
+                            onChange={(e) => setStartNum(parseInt(e.target.value) || 0)}
+                            disabled={isProcessing}
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                          />
+                        </div>
+                        <div className="flex-1">
+                          <label className="block text-sm font-medium text-gray-700 mb-1">編號補零位數</label>
+                          <select
+                            value={padding}
+                            onChange={(e) => setPadding(parseInt(e.target.value))}
+                            disabled={isProcessing}
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
+                          >
+                            <option value={1}>1 (1, 2, 3)</option>
+                            <option value={2}>2 (01, 02)</option>
+                            <option value={3}>3 (001, 002)</option>
+                            <option value={4}>4 (0001)</option>
+                            <option value={5}>5 (00001)</option>
+                          </select>
+                        </div>
+                      </div>
+                      
+                      <p className="text-xs text-gray-500 mt-2">
+                        * 輸出格式將統一強制為 <strong>.jpg</strong>。
+                      </p>
+                    </div>
+
+                    {files.some(f => f.isManuallyEdited && f.status !== 'success') && (
+                      <div className="mt-4 flex justify-end">
+                        <button
+                          onClick={resetManualEdits}
+                          className="text-sm text-blue-600 hover:text-blue-800 underline transition-colors"
+                        >
+                          取消手動修改，重新套用規則
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="mt-8">
+                      <button
+                        onClick={executeExport}
+                        disabled={isProcessing || files.length === 0}
+                        className="w-full py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold flex justify-center items-center gap-2 transition-all disabled:opacity-50 shadow-sm"
+                      >
+                        <Icon name="download" size={20} />
+                        {isProcessing ? '處理中...' : '轉換並打包下載 ZIP'}
+                      </button>
+                      
+                      {isProcessing && (
+                        <div className="mt-4">
+                          <div className="w-full bg-gray-200 rounded-full h-2.5">
+                            <div className="bg-green-600 h-2.5 rounded-full transition-all duration-300" style={{ width: `${progress}%` }}></div>
+                          </div>
+                          <p className="text-center text-xs text-gray-500 mt-2">{progress}% 完成</p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-6 bg-yellow-50 p-4 rounded-lg flex items-start gap-3 border border-yellow-200">
+                       <Icon name="alert-triangle" className="text-yellow-600 shrink-0 mt-0.5" size={20} />
+                       <p className="text-xs text-yellow-800 leading-relaxed">
+                         <strong>注意：</strong>解析度設定越高，產生的圖片越清晰，但處理時間會越久，且 ZIP 檔案會變大。若頁數極多，建議先使用預設解析度。
+                       </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="lg:col-span-2">
+                  <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-[600px]">
+                    <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+                      <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                        <Icon name="image" size={20} className="text-gray-600"/>
+                        即將匯出的圖片清單 ({files.length} 頁)
+                      </h2>
+                      <button
+                        onClick={() => setShowPasteModal(true)}
+                        disabled={isProcessing || files.length === 0}
+                        className="flex items-center gap-2 px-3 py-1.5 text-sm bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 hover:text-blue-600 rounded-md font-medium transition-colors shadow-sm disabled:opacity-50"
+                      >
+                        <Icon name="clipboard" size={16} />
+                        從 Excel 貼上命名
+                      </button>
+                    </div>
+                    
+                    <div className="flex-1 overflow-y-auto p-0">
+                      <table className="w-full text-left border-collapse">
+                        <thead className="bg-white sticky top-0 shadow-sm z-10">
+                          <tr>
+                            <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider w-24">PDF來源</th>
+                            <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center w-10"></th>
+                            <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">將儲存為 (可點擊修改)</th>
+                            <th className="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider text-right w-24">狀態</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {files.map((file, idx) => (
+                            <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                              <td className="px-6 py-3 text-sm text-gray-500 font-medium">
+                                {file.oldName}
+                              </td>
+                              <td className="px-4 py-3 text-center text-gray-400">
+                                <Icon name="arrow-right" size={16} className="inline" />
+                              </td>
+                              <td className="px-6 py-2">
+                                <input
+                                  type="text"
+                                  value={file.newName}
+                                  onChange={(e) => handleManualNameChange(idx, e.target.value)}
+                                  disabled={isProcessing || file.status === 'success'}
+                                  className={`w-full px-3 py-1.5 text-sm font-medium rounded outline-none transition-all ${
+                                    file.isManuallyEdited 
+                                      ? 'bg-yellow-50 border-yellow-300 text-yellow-800 focus:ring-2 focus:ring-yellow-400' 
+                                      : 'bg-transparent border-transparent hover:border-gray-300 text-blue-600 focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200'
+                                  } border`}
+                                  title={file.newName}
+                                  placeholder="請輸入新檔名.jpg"
+                                />
+                              </td>
+                              <td className="px-6 py-3 text-right">
+                                {file.status === 'pending' && <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded">等待匯出</span>}
+                                {file.status === 'success' && <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-100 px-2 py-1 rounded"><Icon name="check-circle" size={14}/> 成功</span>}
+                                {file.status === 'error' && <span className="inline-flex items-center gap-1 text-xs text-red-700 bg-red-100 px-2 py-1 rounded"><Icon name="x-circle" size={14}/> 失敗</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            )}
+
+            {showPasteModal && (
+              <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+                <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col transform transition-all">
+                  <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
+                    <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                      <Icon name="clipboard" size={20} className="text-blue-600"/>
+                      從 Excel 批次貼上檔名
+                    </h3>
+                    <button 
+                      onClick={() => setShowPasteModal(false)} 
+                      className="text-gray-400 hover:text-gray-600 transition-colors focus:outline-none"
+                    >
+                      <Icon name="x" size={20} />
+                    </button>
+                  </div>
+                  <div className="p-6 flex-1">
+                    <p className="text-sm text-gray-600 mb-3">
+                      請將您準備好的檔名直接貼在下方（每行一個檔名）。<br/>
+                      系統會由上往下對應到 PDF 的每一頁，並自動補上 <strong>.jpg</strong>。
+                    </p>
+                    <textarea
+                      className="w-full h-64 p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-none font-mono text-sm leading-relaxed"
+                      placeholder="貼上範例：&#10;封面圖片&#10;第一章節&#10;第二章節"
+                      value={pasteContent}
+                      onChange={(e) => setPasteContent(e.target.value)}
+                      autoFocus
+                    ></textarea>
+                  </div>
+                  <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-end gap-3">
+                    <button 
+                      onClick={() => setShowPasteModal(false)}
+                      className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 font-medium transition-colors"
+                    >
+                      取消
+                    </button>
+                    <button 
+                      onClick={handleApplyPaste}
+                      disabled={!pasteContent.trim()}
+                      className="px-4 py-2 text-white bg-blue-600 rounded-lg hover:bg-blue-700 font-medium transition-colors disabled:opacity-50"
+                    >
+                      確認套用
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+          </div>
+        </div>
+      );
+    }
+
+    // 渲染 React 到 DOM
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
