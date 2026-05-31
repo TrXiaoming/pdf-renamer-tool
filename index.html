@@ -5,22 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PDF 切割圖片 & 批次命名工具</title>
   
-  <!-- 引入 React & ReactDOM -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   
-  <!-- 引入 Babel (讓瀏覽器能直接編譯 JSX) -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   
-  <!-- 引入 Tailwind CSS (供樣式使用) -->
   <script src="https://cdn.tailwindcss.com"></script>
 
-  <!-- 引入 Lucide Icons ( SVG 圖示 ) -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-    /* 簡易模擬 Lucide React 元件的樣式 */
     .icon { width: 1em; height: 1em; display: inline-block; vertical-align: middle; }
   </style>
 </head>
@@ -30,8 +25,6 @@
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
-    // --- 簡易模擬 Lucide React 的 Icon 元件 ---
-    // 在純前端無建置環境下，我們用原生的 i 標籤配合 lucide.createIcons() 來實現
     const Icon = ({ name, size = 24, className = '', color }) => {
       const iconRef = useRef(null);
       useEffect(() => {
@@ -51,7 +44,6 @@
       return <i data-lucide={name} className={`icon ${className}`} style={style} ref={iconRef}></i>;
     };
 
-    // --- 主應用程式 ---
     function App() {
       const [files, setFiles] = useState([]);
       const [prefix, setPrefix] = useState('Page_');
@@ -71,7 +63,6 @@
 
       const fileInputRef = useRef(null);
 
-      // 動態載入外部套件 (JSZip 與 PDF.js)
       useEffect(() => {
         let loadedCount = 0;
         const totalLibs = 2;
@@ -121,14 +112,19 @@
           return;
         }
 
+        // 自動將 PDF 檔名（去掉 .pdf 副檔名）設為預設前綴，並加上底線
+        const baseName = file.name.replace(/\.pdf$/i, '');
+        const newPrefix = baseName + '_';
+        setPrefix(newPrefix);
+
         setPdfFile(file);
         setErrorMsg('');
         setStatusMsg('');
         setFiles([]);
-        processPdf(file);
+        processPdf(file, newPrefix);
       };
 
-      const processPdf = async (file) => {
+      const processPdf = async (file, currentPrefix) => {
         setIsProcessing(true);
         setErrorMsg('');
         try {
@@ -139,7 +135,7 @@
           
           const newFiles = [];
           for (let i = 1; i <= numPages; i++) {
-            const defaultName = `${prefix}${String(startNum + i - 1).padStart(padding, '0')}.jpg`;
+            const defaultName = `${currentPrefix}${String(startNum + i - 1).padStart(padding, '0')}.jpg`;
             newFiles.push({
               pageNumber: i,
               oldName: `第 ${i} 頁`,
@@ -225,9 +221,10 @@
                newBaseName = newBaseName.substring(0, newBaseName.length - 4);
             }
 
+            // 修改核心：在貼上的檔名前面，動態加上 prefix 變數
             newFiles[i] = {
               ...newFiles[i],
-              newName: newBaseName + '.jpg',
+              newName: prefix + newBaseName + '.jpg',
               isManuallyEdited: true
             };
           }
@@ -508,7 +505,7 @@
                         className="flex items-center gap-2 px-3 py-1.5 text-sm bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 hover:text-blue-600 rounded-md font-medium transition-colors shadow-sm disabled:opacity-50"
                       >
                         <Icon name="clipboard" size={16} />
-                        從 Excel 貼上命名
+                        批量命名
                       </button>
                     </div>
                     
@@ -568,7 +565,7 @@
                   <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
                     <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
                       <Icon name="clipboard" size={20} className="text-blue-600"/>
-                      從 Excel 批次貼上檔名
+                      批量貼上命名
                     </h3>
                     <button 
                       onClick={() => setShowPasteModal(false)} 
@@ -579,8 +576,9 @@
                   </div>
                   <div className="p-6 flex-1">
                     <p className="text-sm text-gray-600 mb-3">
-                      請將您準備好的檔名直接貼在下方（每行一個檔名）。<br/>
-                      系統會由上往下對應到 PDF 的每一頁，並自動補上 <strong>.jpg</strong>。
+                      請將準備好的檔名列表直接貼在下方文字框中。<br/>
+                      <strong className="text-blue-600">格式說明：</strong>請確保<strong>每行只有一個檔名</strong>（例如：從 Excel 複製一整欄，或直接換行輸入）。<br/>
+                      系統會由上往下依序對應，並自動加上左側設定的 <strong>前綴</strong> 與 <strong>.jpg</strong>。
                     </p>
                     <textarea
                       className="w-full h-64 p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-none font-mono text-sm leading-relaxed"
